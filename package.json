@@ -1,0 +1,23 @@
+{
+  "name": "friendlycode",
+  "version": "1.0.0",
+  "description": "Codebase LLM-readability scorer",
+  "main": "dist/index.js",
+  "bin": {
+    "friendlycode": "dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.39.0",
+    "chalk": "^4.1.2",
+    "commander": "^12.1.0",
+    "ts-morph": "^24.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.0",
+    "typescript": "^5.5.0"
+  }
+}
