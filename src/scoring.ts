@@ -14,21 +14,27 @@ export function aggregateScores(subIssueResults: SubIssueResult[]): {
   const categoryResults: CategoryResult[] = [];
 
   for (const cat of categories) {
-    const subIssueCount = cat.subIssues.length;
-    const pointsPerSubIssue = 10 / subIssueCount;
-
     const subIssues: SubIssueResult[] = [];
-    let categoryScore = 0;
 
     for (const si of cat.subIssues) {
       const result = resultMap.get(si.id) ?? {
         id: si.id,
-        score: 0.5,
+        score: 0,
+        excluded: true,
         findings: [],
         summary: "Not evaluated",
       };
       subIssues.push(result);
-      categoryScore += result.score * pointsPerSubIssue;
+    }
+
+    // Only score sub-issues that were actually evaluated
+    const evaluated = subIssues.filter((si) => !si.excluded);
+    let categoryScore: number;
+    if (evaluated.length > 0) {
+      const pointsPerSubIssue = 10 / evaluated.length;
+      categoryScore = evaluated.reduce((sum, si) => sum + si.score * pointsPerSubIssue, 0);
+    } else {
+      categoryScore = 0;
     }
 
     categoryResults.push({
@@ -50,10 +56,11 @@ function generateRecommendations(categoryResults: CategoryResult[]): Recommendat
   const recommendations: Recommendation[] = [];
 
   for (const cat of categoryResults) {
-    for (const si of cat.subIssues) {
+    const evaluated = cat.subIssues.filter((si) => !si.excluded);
+    for (const si of evaluated) {
       if (si.score >= 0.8) { continue; } // Good enough, skip
 
-      const potentialGain = (1 - si.score) * (10 / cat.subIssues.length);
+      const potentialGain = (1 - si.score) * (10 / evaluated.length);
 
       // Generate recommendations from findings
       if (si.findings.length > 0) {

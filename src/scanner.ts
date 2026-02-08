@@ -18,10 +18,11 @@ import { evaluateWithLlm } from "./analyzers/llm/evaluator";
 import { aggregateScores } from "./scoring";
 import { writeJsonReport } from "./reporter/json";
 import { writeMarkdownReport } from "./reporter/markdown";
+import { writeHtmlReport } from "./reporter/html";
 
 export type ScanOptions = {
   targetPath: string;
-  skipLlm: boolean;
+  llmProvider: "api" | "cli";
   outputDir: string;
 };
 
@@ -32,15 +33,21 @@ export async function scan(options: ScanOptions): Promise<Report> {
   console.log(chalk.bold("\nFriendlyCode — Codebase LLM-Readability Scorer\n"));
   console.log(`Analyzing: ${rootPath}`);
   console.log(`Output:    ${path.resolve(options.outputDir)}`);
-  console.log(`LLM:       ${options.skipLlm ? "Skipped (--skip-llm)" : "Enabled"}\n`);
+  const llmLabel = options.llmProvider === "cli" ? "Claude CLI" : "API";
+  console.log(`LLM:       ${llmLabel}\n`);
 
-  // Find tsconfig
-  const tsconfigPath = findTsConfig(rootPath);
-  console.log(chalk.gray(`Using tsconfig: ${tsconfigPath ?? "none (scanning all .ts files)"}\n`));
+  // Find tsconfigs
+  const tsconfigs = findAllTsConfigs(rootPath);
+  if (tsconfigs.length > 0) {
+    console.log(chalk.gray(`Found tsconfigs: ${tsconfigs.map(t => path.relative(rootPath, t)).join(", ")}`));
+  } else {
+    console.log(chalk.gray(`No tsconfig found — scanning all .ts/.tsx files`));
+  }
+  console.log("");
 
   // Create ts-morph project
   console.log(chalk.cyan("Loading project..."));
-  const project = createProject(rootPath, tsconfigPath);
+  const project = createProject(rootPath, tsconfigs);
   const allSourceFiles = project.getSourceFiles();
   console.log(chalk.green(`Found ${allSourceFiles.length} source files`));
 
@@ -96,35 +103,21 @@ export async function scan(options: ScanOptions): Promise<Report> {
   console.log(chalk.green(`\nStatic analysis complete: ${staticResults.length} sub-issues evaluated\n`));
 
   // Phase 2: LLM Analysis
-  let llmResults: SubIssueResult[] = [];
-  if (!options.skipLlm) {
-    console.log(chalk.cyan("Phase 2: LLM Analysis"));
-    process.stdout.write(chalk.gray("  Sampling representative files..."));
-    const sampled = sampleFiles(sampledProject, rootPath);
-    console.log(chalk.green(` ${sampled.length} files selected`));
+  console.log(chalk.cyan("Phase 2: LLM Analysis"));
+  process.stdout.write(chalk.gray("  Sampling representative files..."));
+  const sampled = sampleFiles(sampledProject, rootPath);
+  console.log(chalk.green(` ${sampled.length} files selected`));
 
-    for (const f of sampled) {
-      console.log(chalk.gray(`    ${f.relativePath} (${f.reason})`));
-    }
-    console.log("");
-
-    llmResults = await evaluateWithLlm(sampled, (msg) => {
-      console.log(chalk.gray(`  ${msg}`));
-    });
-
-    console.log(chalk.green(`\nLLM analysis complete: ${llmResults.length} sub-issues evaluated\n`));
-  } else {
-    // Provide neutral scores for LLM sub-issues
-    const { getLlmSubIssues } = require("./config");
-    for (const si of getLlmSubIssues()) {
-      llmResults.push({
-        id: si.id,
-        score: 0.5,
-        findings: [],
-        summary: "Not evaluated (--skip-llm)",
-      });
-    }
+  for (const f of sampled) {
+    console.log(chalk.gray(`    ${f.relativePath} (${f.reason})`));
   }
+  console.log("");
+
+  const llmResults = await evaluateWithLlm(sampled, options.llmProvider, (msg) => {
+    console.log(chalk.gray(`  ${msg}`));
+  });
+
+  console.log(chalk.green(`\nLLM analysis complete: ${llmResults.length} sub-issues evaluated\n`));
 
   // Aggregate scores
   console.log(chalk.cyan("Scoring..."));
@@ -136,7 +129,7 @@ export async function scan(options: ScanOptions): Promise<Report> {
     timestamp: new Date().toISOString(),
     totalFiles: allSourceFiles.length,
     totalLines,
-    llmAnalysisIncluded: !options.skipLlm,
+    llmAnalysisIncluded: true,
     durationMs: Date.now() - startTime,
   };
 
@@ -150,6 +143,7 @@ export async function scan(options: ScanOptions): Promise<Report> {
   // Write reports
   const jsonPath = writeJsonReport(report, options.outputDir);
   const mdPath = writeMarkdownReport(report, options.outputDir);
+  const htmlPath = writeHtmlReport(report, options.outputDir);
 
   console.log(chalk.bold.green(`\nOverall Score: ${overallScore}/100\n`));
 
@@ -162,38 +156,103 @@ export async function scan(options: ScanOptions): Promise<Report> {
   console.log(chalk.gray(`\nReports written to:`));
   console.log(chalk.gray(`  JSON:     ${jsonPath}`));
   console.log(chalk.gray(`  Markdown: ${mdPath}`));
+  console.log(chalk.gray(`  HTML:     ${htmlPath}`));
   console.log(chalk.gray(`  Duration: ${((Date.now() - startTime) / 1000).toFixed(1)}s\n`));
 
   return report;
 }
 
-function findTsConfig(rootPath: string): string | undefined {
-  const candidates = ["tsconfig.json", "tsconfig.build.json"];
-  for (const candidate of candidates) {
-    const fullPath = path.join(rootPath, candidate);
+function findAllTsConfigs(rootPath: string): string[] {
+  const results: string[] = [];
+
+  // Check root first
+  for (const name of ["tsconfig.json", "tsconfig.build.json"]) {
+    const fullPath = path.join(rootPath, name);
     if (fs.existsSync(fullPath)) {
-      return fullPath;
+      results.push(fullPath);
     }
   }
-  return undefined;
-}
 
-function createProject(rootPath: string, tsconfigPath?: string): Project {
-  if (tsconfigPath) {
-    const project = new Project({
-      tsConfigFilePath: tsconfigPath,
-      skipAddingFilesFromTsConfig: false,
-      skipFileDependencyResolution: true,
-    });
-    return project;
+  // Check immediate subdirectories for additional tsconfigs
+  let entries: fs.Dirent[];
+  try {
+    entries = fs.readdirSync(rootPath, { withFileTypes: true });
+  } catch {
+    return results;
+  }
+  for (const entry of entries) {
+    if (!entry.isDirectory() || entry.name === "node_modules" || entry.name === "dist") continue;
+    const subTsconfig = path.join(rootPath, entry.name, "tsconfig.json");
+    if (fs.existsSync(subTsconfig)) {
+      results.push(subTsconfig);
+    }
   }
 
-  // Fallback: add all .ts files manually
+  return results;
+}
+
+function findAllTsFiles(dir: string): string[] {
+  const results: string[] = [];
+  let entries: fs.Dirent[];
+  try {
+    entries = fs.readdirSync(dir, { withFileTypes: true });
+  } catch {
+    return results;
+  }
+  for (const entry of entries) {
+    if (entry.name === "node_modules" || entry.name === "dist") continue;
+    const fullPath = path.join(dir, entry.name);
+    if (entry.isDirectory()) {
+      results.push(...findAllTsFiles(fullPath));
+    } else if (/\.(ts|tsx)$/.test(entry.name) && !entry.name.endsWith(".d.ts")) {
+      results.push(fullPath);
+    }
+  }
+  return results;
+}
+
+function createProject(rootPath: string, tsconfigs: string[]): Project {
   const project = new Project({
     skipFileDependencyResolution: true,
   });
-  project.addSourceFilesAtPaths(path.join(rootPath, "src/**/*.ts"));
-  project.addSourceFilesAtPaths(path.join(rootPath, "src/**/*.tsx"));
+
+  // Load files from all tsconfigs
+  for (const tsc of tsconfigs) {
+    try {
+      const sub = new Project({
+        tsConfigFilePath: tsc,
+        skipAddingFilesFromTsConfig: false,
+        skipFileDependencyResolution: true,
+      });
+      for (const sf of sub.getSourceFiles()) {
+        const fp = sf.getFilePath();
+        if (!fp.includes("node_modules") && !project.getSourceFile(fp)) {
+          project.addSourceFileAtPath(fp);
+        }
+      }
+    } catch {
+      // Skip broken tsconfigs
+    }
+  }
+
+  // Also add any .ts/.tsx files on disk not yet in the project (e.g. test files excluded by tsconfig)
+  const allTsFiles = findAllTsFiles(rootPath);
+  for (const fp of allTsFiles) {
+    if (!project.getSourceFile(fp)) {
+      try {
+        project.addSourceFileAtPath(fp);
+      } catch {
+        // Skip files that can't be parsed
+      }
+    }
+  }
+
+  // Fallback if nothing was loaded
+  if (project.getSourceFiles().length === 0) {
+    project.addSourceFilesAtPaths(path.join(rootPath, "**/*.ts"));
+    project.addSourceFilesAtPaths(path.join(rootPath, "**/*.tsx"));
+  }
+
   return project;
 }
 

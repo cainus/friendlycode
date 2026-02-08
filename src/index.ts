@@ -14,13 +14,16 @@ program
   .command("analyze")
   .description("Analyze a TypeScript codebase for LLM readability")
   .argument("<path>", "Path to the codebase root")
-  .option("--skip-llm", "Skip LLM-based analysis (static analysis only)", false)
+  .option("--llm-provider <provider>", "LLM provider to use: 'api' (default, requires ANTHROPIC_API_KEY) or 'cli' (uses local claude CLI)", "api")
   .option("--output-dir <dir>", "Output directory for reports", ".")
-  .action(async (targetPath: string, options: { skipLlm: boolean; outputDir: string }) => {
+  .action(async (targetPath: string, options: { llmProvider: string; outputDir: string }) => {
     try {
+      if (options.llmProvider !== "api" && options.llmProvider !== "cli") {
+        throw new Error(`Invalid --llm-provider value: "${options.llmProvider}". Must be "api" or "cli".`);
+      }
       await scan({
         targetPath,
-        skipLlm: options.skipLlm,
+        llmProvider: options.llmProvider,
         outputDir: options.outputDir,
       });
     } catch (error) {

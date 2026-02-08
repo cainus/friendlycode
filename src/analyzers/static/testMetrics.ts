@@ -1,18 +1,42 @@
 import { Project, SourceFile } from "ts-morph";
 import { SubIssueResult, Finding } from "../types";
 import * as path from "path";
+import * as fs from "fs";
+
+function findTestFiles(dir: string, rootPath: string): string[] {
+  const results: string[] = [];
+  let entries: fs.Dirent[];
+  try {
+    entries = fs.readdirSync(dir, { withFileTypes: true });
+  } catch {
+    return results;
+  }
+  for (const entry of entries) {
+    if (entry.name === "node_modules" || entry.name === "dist") continue;
+    const fullPath = path.join(dir, entry.name);
+    if (entry.isDirectory()) {
+      results.push(...findTestFiles(fullPath, rootPath));
+    } else if (/\.(test|spec)\.(ts|tsx|js|jsx)$/.test(entry.name)) {
+      results.push(path.relative(rootPath, fullPath));
+    }
+  }
+  return results;
+}
 
 export function analyzeTestMetrics(project: Project, rootPath: string): SubIssueResult[] {
   const sourceFiles = project.getSourceFiles();
 
+  // Discover test files from filesystem since tsconfig often excludes them
+  const testFilePaths = findTestFiles(rootPath, rootPath);
+
   return [
-    analyzeTestColocation(sourceFiles, rootPath),
-    analyzeTestExistenceRatio(sourceFiles, rootPath),
-    analyzeTestDescriptionQuality(sourceFiles, rootPath),
+    analyzeTestColocation(sourceFiles, rootPath, testFilePaths),
+    analyzeTestExistenceRatio(sourceFiles, rootPath, testFilePaths),
+    analyzeTestDescriptionQuality(sourceFiles, rootPath, testFilePaths),
   ];
 }
 
-function analyzeTestColocation(files: SourceFile[], rootPath: string): SubIssueResult {
+function analyzeTestColocation(files: SourceFile[], rootPath: string, testFilePaths: string[]): SubIssueResult {
   const findings: Finding[] = [];
 
   const sourceFiles = files.filter((f) => {
@@ -20,12 +44,7 @@ function analyzeTestColocation(files: SourceFile[], rootPath: string): SubIssueR
     return !fp.includes(".test.") && !fp.includes(".spec.") && !fp.includes("__tests__") && !fp.includes("node_modules");
   });
 
-  const testFiles = files.filter((f) => {
-    const fp = f.getFilePath();
-    return fp.includes(".test.") || fp.includes(".spec.");
-  });
-
-  const testFileSet = new Set(testFiles.map((f) => path.relative(rootPath, f.getFilePath())));
+  const testFileSet = new Set(testFilePaths);
   let colocatedCount = 0;
   let checkedCount = 0;
 
@@ -74,7 +93,7 @@ function analyzeTestColocation(files: SourceFile[], rootPath: string): SubIssueR
   };
 }
 
-function analyzeTestExistenceRatio(files: SourceFile[], rootPath: string): SubIssueResult {
+function analyzeTestExistenceRatio(files: SourceFile[], rootPath: string, testFilePaths: string[]): SubIssueResult {
   const findings: Finding[] = [];
 
   const sourceFiles = files.filter((f) => {
@@ -83,12 +102,9 @@ function analyzeTestExistenceRatio(files: SourceFile[], rootPath: string): SubIs
   });
 
   const testFileNames = new Set<string>();
-  for (const file of files) {
-    const fp = file.getFilePath();
-    if (fp.includes(".test.") || fp.includes(".spec.")) {
-      const baseName = path.basename(fp).replace(/\.(test|spec)\.(ts|tsx|js|jsx)$/, "").toLowerCase();
-      testFileNames.add(baseName);
-    }
+  for (const tp of testFilePaths) {
+    const baseName = path.basename(tp).replace(/\.(test|spec)\.(ts|tsx|js|jsx)$/, "").toLowerCase();
+    testFileNames.add(baseName);
   }
 
   let withTests = 0;
@@ -130,19 +146,20 @@ function analyzeTestExistenceRatio(files: SourceFile[], rootPath: string): SubIs
   };
 }
 
-function analyzeTestDescriptionQuality(files: SourceFile[], rootPath: string): SubIssueResult {
+function analyzeTestDescriptionQuality(files: SourceFile[], rootPath: string, testFilePaths: string[]): SubIssueResult {
   const findings: Finding[] = [];
-  const testFiles = files.filter((f) => {
-    const fp = f.getFilePath();
-    return fp.includes(".test.") || fp.includes(".spec.");
-  });
 
   let goodDescriptions = 0;
   let poorDescriptions = 0;
 
-  for (const file of testFiles) {
-    const relPath = path.relative(rootPath, file.getFilePath());
-    const text = file.getFullText();
+  for (const relPath of testFilePaths) {
+    const fullPath = path.join(rootPath, relPath);
+    let text: string;
+    try {
+      text = fs.readFileSync(fullPath, "utf-8");
+    } catch {
+      continue;
+    }
 
     // Find it() and describe() strings
     const itPattern = /\bit\(\s*["'`](.*?)["'`]/g;

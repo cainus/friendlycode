@@ -16,7 +16,7 @@ export function writeMarkdownReport(report: Report, outputDir: string): string {
   lines.push(`- Analyzed: \`${report.metadata.analyzedPath}\``);
   lines.push(`- Date: ${report.metadata.timestamp}`);
   lines.push(`- Files: ${report.metadata.totalFiles} (${report.metadata.totalLines.toLocaleString()} lines)`);
-  lines.push(`- LLM Analysis: ${report.metadata.llmAnalysisIncluded ? "Yes" : "No (--skip-llm)"}`);
+  lines.push(`- LLM Analysis: Yes`);
   lines.push(`- Duration: ${(report.metadata.durationMs / 1000).toFixed(1)}s`);
   lines.push("");
 

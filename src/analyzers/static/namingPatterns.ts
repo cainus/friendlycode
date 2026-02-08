@@ -12,7 +12,6 @@ export function analyzeNamingPatterns(project: Project, rootPath: string): SubIs
     analyzeBooleanPrefixes(sourceFiles, rootPath),
     analyzeFunctionVerbPrefixes(sourceFiles, rootPath),
     analyzeShortIdentifiers(sourceFiles, rootPath),
-    analyzeFileNameMatchesExport(sourceFiles, rootPath),
   ];
 }
 
@@ -97,6 +96,19 @@ function analyzeNameUniqueness(files: SourceFile[], rootPath: string): SubIssueR
   };
 }
 
+// Names that are clearly boolean without a prefix
+const BOOLEAN_SUFFIXES = new Set(["enabled", "disabled", "exists", "acquired", "found", "done", "ready", "valid", "invalid", "active", "inactive", "visible", "hidden", "loaded", "loading", "open", "closed", "locked", "unlocked", "selected", "checked", "expanded", "collapsed", "connected", "disconnected", "authenticated", "authorized", "required", "optional", "empty", "mounted", "resolved", "rejected", "pending", "completed", "failed", "succeeded", "matched", "allowed", "denied", "available", "unavailable", "editable", "clickable", "focusable", "draggable", "sortable", "filterable", "searchable", "changed", "handled", "assigned", "joined", "initialized", "reached", "needed", "included", "ignored", "mode"]);
+const BOOLEAN_EXACT = new Set(["ok", "success", "error", "result", "match", "found", "exists", "done", "ready", "valid", "empty", "open", "closed", "active", "visible", "hidden", "loading", "loaded", "enabled", "disabled", "locked", "selected", "checked", "connected", "authenticated", "authorized", "required", "pending", "completed", "failed", "matched", "allowed", "available", "acquired", "handled"]);
+
+function isClearBooleanName(name: string): boolean {
+  const lower = name.toLowerCase();
+  if (BOOLEAN_EXACT.has(lower)) return true;
+  for (const suffix of BOOLEAN_SUFFIXES) {
+    if (lower.endsWith(suffix) && lower.length > suffix.length) return true;
+  }
+  return false;
+}
+
 function analyzeBooleanPrefixes(files: SourceFile[], rootPath: string): SubIssueResult {
   const findings: Finding[] = [];
   let boolWithPrefix = 0;
@@ -104,14 +116,21 @@ function analyzeBooleanPrefixes(files: SourceFile[], rootPath: string): SubIssue
 
   for (const file of files) {
     const relPath = path.relative(rootPath, file.getFilePath());
+    const isTestFile = relPath.includes(".test.") || relPath.includes(".spec.");
 
     file.forEachDescendant((node) => {
       if (Node.isVariableDeclaration(node)) {
         const typeText = node.getType().getText();
         if (typeText === "boolean" || typeText === "true" || typeText === "false") {
           const name = node.getName();
+
+          // Skip generic names like "result" in test files
+          if (isTestFile && (name === "result" || name === "output" || name === "actual" || name === "expected")) {
+            return;
+          }
+
           const hasPrefix = thresholds.booleanPrefixes.some((p) => name.startsWith(p) && name.length > p.length && name[p.length]! === name[p.length]!.toUpperCase());
-          if (hasPrefix) {
+          if (hasPrefix || isClearBooleanName(name)) {
             boolWithPrefix++;
           } else {
             boolWithoutPrefix++;
@@ -151,6 +170,11 @@ function analyzeFunctionVerbPrefixes(files: SourceFile[], rootPath: string): Sub
     for (const fn of file.getFunctions()) {
       const name = fn.getName();
       if (!name) { continue; }
+      // Skip well-known names that don't need verb prefixes
+      if (thresholds.functionVerbExclusions.has(name)) {
+        withVerb++; // count as fine
+        continue;
+      }
       if (thresholds.functionVerbPrefixes.some((v) => name.startsWith(v) && name.length > v.length)) {
         withVerb++;
       } else {

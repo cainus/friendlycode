@@ -12,7 +12,6 @@ export function analyzeImportGraph(project: Project, rootPath: string): SubIssue
     analyzeMaxImportDepth(graph, rootPath),
     analyzeFilesPerFeature(graph, rootPath),
     analyzeInheritanceDepth(sourceFiles, rootPath),
-    analyzeMiddlewareChains(sourceFiles, rootPath),
   ];
 }
 

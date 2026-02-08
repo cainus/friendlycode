@@ -10,7 +10,6 @@ export function analyzeTypeUsage(project: Project, rootPath: string): SubIssueRe
     analyzeAnyUsage(sourceFiles, rootPath),
     analyzeUntypedSignatures(sourceFiles, rootPath),
     analyzeTypeAssertions(sourceFiles, rootPath),
-    analyzeSchemaValidation(sourceFiles, rootPath),
   ];
 }
 

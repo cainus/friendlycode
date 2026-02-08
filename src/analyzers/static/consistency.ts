@@ -1,12 +1,31 @@
 import { Project, SourceFile, SyntaxKind } from "ts-morph";
 import { SubIssueResult, Finding } from "../types";
 import * as path from "path";
+import * as fs from "fs";
+
+function findTestFiles(dir: string): string[] {
+  const results: string[] = [];
+  let entries: fs.Dirent[];
+  try {
+    entries = fs.readdirSync(dir, { withFileTypes: true });
+  } catch {
+    return results;
+  }
+  for (const entry of entries) {
+    if (entry.name === "node_modules" || entry.name === "dist") continue;
+    const fullPath = path.join(dir, entry.name);
+    if (entry.isDirectory()) {
+      results.push(...findTestFiles(fullPath));
+    } else if (/\.(test|spec)\.(ts|tsx|js|jsx)$/.test(entry.name)) {
+      results.push(fullPath);
+    }
+  }
+  return results;
+}
 
 export function analyzeConsistency(project: Project, rootPath: string): SubIssueResult[] {
-  const sourceFiles = project.getSourceFiles();
-
   return [
-    analyzeTestPatternConsistency(sourceFiles, rootPath),
+    analyzeTestPatternConsistency(rootPath),
   ];
 }
 
@@ -18,14 +37,11 @@ type TestPattern = {
   setupStyle: "inline" | "beforeEach" | "helper" | "mixed";
 };
 
-function analyzeTestPatternConsistency(files: SourceFile[], rootPath: string): SubIssueResult {
+function analyzeTestPatternConsistency(rootPath: string): SubIssueResult {
   const findings: Finding[] = [];
-  const testFiles = files.filter((f) => {
-    const fp = f.getFilePath();
-    return fp.includes(".test.") || fp.includes(".spec.") || fp.includes("__tests__");
-  });
+  const testFilePaths = findTestFiles(rootPath);
 
-  if (testFiles.length === 0) {
+  if (testFilePaths.length === 0) {
     return {
       id: "1.5",
       score: 0.5, // neutral if no tests found
@@ -36,8 +52,13 @@ function analyzeTestPatternConsistency(files: SourceFile[], rootPath: string): S
 
   const patterns: TestPattern[] = [];
 
-  for (const file of testFiles) {
-    const text = file.getFullText();
+  for (const filePath of testFilePaths) {
+    let text: string;
+    try {
+      text = fs.readFileSync(filePath, "utf-8");
+    } catch {
+      continue;
+    }
     const pattern: TestPattern = {
       usesBeforeEach: /\bbeforeEach\b/.test(text),
       usesAfterEach: /\bafterEach\b/.test(text),
@@ -92,7 +113,7 @@ function analyzeTestPatternConsistency(files: SourceFile[], rootPath: string): S
     id: "1.5",
     score,
     findings,
-    summary: `${inconsistencies} test pattern inconsistencies found across ${testFiles.length} test files`,
+    summary: `${inconsistencies} test pattern inconsistencies found across ${testFilePaths.length} test files`,
   };
 }
 

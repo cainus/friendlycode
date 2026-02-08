@@ -11,6 +11,7 @@ export type SubIssueResult = {
   score: number; // 0-1
   findings: Finding[];
   summary: string;
+  excluded?: boolean; // true if evaluation failed — excluded from scoring
 };
 
 export type CategoryResult = {
